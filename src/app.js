@@ -9,6 +9,7 @@ const M = {
   B: { n: 'B:オフセット+フェザリング', d: '画像をラップアラウンドでずらし、端のゾーンを中央部分の内容でなじませます。結果は元の位置に戻り、外側の端がつながります。',
     p: [['ox', '水平オフセット (%)', 0, 100, 50], ['oy', '垂直オフセット (%)', 0, 100, 50], ['w', 'フェザー幅 (%)', 5, 50, 25], ['s', '強度 (%)', 0, 100, 100]] }
 };
+const MAXH = 10, MAXPX = 4000; // riwayat maks. 10, sisi terpanjang hasil maks. 4000 px
 for (const k in M) S.p[k] = Object.fromEntries(M[k].p.map(a => [a[0], a[4]]));
 
 const ss = t => t * t * (3 - 2 * t);
@@ -42,6 +43,60 @@ async function run(src, m, p, prog) {
   }
   return { w, h, d: o };
 }
+function edgeC(c) { // diagnostik tepi dari kanvas (hanya membaca strip tepi, hemat memori)
+  const x = c.getContext('2d', { willReadFrequently: true }), w = c.width, h = c.height;
+  const L = x.getImageData(0, 0, 1, h).data, Rr = x.getImageData(w - 1, 0, 1, h).data, Tp = x.getImageData(0, 0, w, 1).data, Bt = x.getImageData(0, h - 1, w, 1).data;
+  let a = 0, b = 0;
+  for (let y = 0; y < h; y++) for (let k = 0; k < 3; k++) a += Math.abs(L[y * 4 + k] - Rr[y * 4 + k]);
+  for (let i = 0; i < w; i++) for (let k = 0; k < 3; k++) b += Math.abs(Tp[i * 4 + k] - Bt[i * 4 + k]);
+  return [a / (h * 765), b / (w * 765)];
+}
+/* ---------- Randomisasi tile: baris digeser horizontal, kolom digeser vertikal ---------- */
+// Teksturnya periodik, jadi tiap sel (baris r, kolom q) mengambil isi tekstur yang digeser (wraparound).
+// Hasil = n kali ukuran asli; bila sisi terpanjang melebihi MAXPX, seluruhnya diperkecil seragam.
+const plan = (n, w, h, lim = MAXPX) => {
+  const k = Math.min(1, lim / (n * Math.max(w, h))), w2 = Math.max(1, Math.floor(w * k)), h2 = Math.max(1, Math.floor(h * k));
+  return { k, w2, h2, W: n * w2, H: n * h2 }; // ukuran tile diskalakan dulu (kualitas tinggi), lalu disusun 1:1
+};
+const rng = a => () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+// Tiap piksel mengambil sampel dari sel miliknya (geser baris/kolom) dan dari sel tetangga di sisi batas terdekat.
+// Bobot tetangga = 0.5 tepat di batas, turun halus (smoothstep) ke 0 pada jarak B; bobot 2D (bilinear) tidak bergantung urutan.
+// Tetangga dihitung wraparound (baris/kolom terakhir <-> pertama), jadi tepi gambar hasil ikut menyambung.
+async function compose(src, n, o, lim, prog) {
+  const { w2, h2, W, H } = plan(n, src.width, src.height, lim);
+  const sc = document.createElement('canvas'); sc.width = w2; sc.height = h2;
+  const sx = sc.getContext('2d', { willReadFrequently: true }); sx.imageSmoothingQuality = 'high'; sx.drawImage(src, 0, 0, w2, h2);
+  const d = sx.getImageData(0, 0, w2, h2).data, out = new Uint8ClampedArray(W * H * 4);
+  const rnd = rng(o.sd), shift = (m, a, i, z) => m === 1 ? Math.round(i * a / 100 * z) % z : m === 2 ? Math.round(rnd() * a / 100 * z) % z : 0;
+  const hs = Array.from({ length: n }, (_, i) => shift(o.hm, o.ha, i, w2)), vs = Array.from({ length: n }, (_, i) => shift(o.vm, o.va, i, h2));
+  const axis = (len, cell) => {
+    const B = o.bw / 100 * cell / 2, idx = new Int32Array(len), oth = new Int32Array(len), wt = new Float32Array(len), loc = new Int32Array(len);
+    for (let i = 0; i < len; i++) {
+      const c = (i / cell) | 0, l = i - c * cell, dl = l + .5, dr = cell - l - .5; idx[i] = c; loc[i] = l; oth[i] = c;
+      if (B > 0 && dl < B) { oth[i] = (c + n - 1) % n; wt[i] = .5 * (1 - ss(dl / B)); }
+      else if (B > 0 && dr < B) { oth[i] = (c + 1) % n; wt[i] = .5 * (1 - ss(dr / B)); }
+    }
+    return { idx, oth, wt, loc };
+  };
+  const ax = axis(W, w2), ay = axis(H, h2), acc = [0, 0, 0, 0]; // akumulasi premultiplied agar alpha aman
+  const smp = (rr, cc, lx, ly, wt) => { const u = (lx - hs[rr] + w2) % w2, v = (ly - vs[cc] + h2) % h2, k = (v * w2 + u) * 4, a = d[k + 3] * wt; acc[0] += d[k] * a; acc[1] += d[k + 1] * a; acc[2] += d[k + 2] * a; acc[3] += a; };
+  const rows = Math.max(1, Math.floor(3e5 / W));
+  for (let Y = 0; Y < H; Y++) {
+    const r = ay.idx[Y], ro = ay.oth[Y], wy = ay.wt[Y], ly = ay.loc[Y];
+    for (let X = 0; X < W; X++) {
+      const q = ax.idx[X], qo = ax.oth[X], wx = ax.wt[X], lx = ax.loc[X];
+      acc[0] = acc[1] = acc[2] = acc[3] = 0;
+      smp(r, q, lx, ly, (1 - wy) * (1 - wx));
+      if (wx > 0) smp(r, qo, lx, ly, (1 - wy) * wx);
+      if (wy > 0) { smp(ro, q, lx, ly, wy * (1 - wx)); if (wx > 0) smp(ro, qo, lx, ly, wy * wx); }
+      const al = acc[3], k = (Y * W + X) * 4;
+      if (al > 0) { out[k] = acc[0] / al; out[k + 1] = acc[1] / al; out[k + 2] = acc[2] / al; out[k + 3] = al; }
+    }
+    if (prog && Y % rows === 0) { prog((Y + 1) / H); await tick(); }
+  }
+  const c = document.createElement('canvas'); c.width = W; c.height = H; c.getContext('2d').putImageData(new ImageData(out, W, H), 0, 0);
+  return c;
+}
 // Selisih rata-rata tepi kiri-kanan dan atas-bawah (0..1). Hanya diagnostik, bukan nilai mutu.
 function edge({ w, h, d }) {
   let a = 0, b = 0;
@@ -65,7 +120,7 @@ async function load(f) {
     const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(bm, 0, 0);
     S.src = { w: bm.width, h: bm.height, d: x.getImageData(0, 0, bm.width, bm.height).data };
     S.name = f.name.replace(/\.[^.]+$/, ''); if (S.srcUrl) URL.revokeObjectURL(S.srcUrl);
-    S.srcUrl = URL.createObjectURL(f); S.out = S.res = null; // buang hasil lama
+    S.srcUrl = URL.createObjectURL(f); S.out = S.res = S.base = S.rn = null; // buang hasil lama
     $('#thumb').src = S.srcUrl; $('#thumb').hidden = false; $('#go').disabled = false;
     $('#meta').textContent = `${f.name}:${bm.width}×${bm.height} px, ${kb(f.size)}, ${f.type || '形式不明'}`;
   } catch (e) {
@@ -95,12 +150,12 @@ const db = new Promise((ok, no) => { const r = indexedDB.open('sts', 1); r.onupg
 const tx = async (m, f) => { const d = await db; return new Promise((ok, no) => { const t = d.transaction('h', m), q = f(t.objectStore('h')); t.oncomplete = () => ok(q && q.result); t.onerror = no; }); };
 async function renderHist() {
   const all = ((await tx('readonly', s => s.getAll())) || []).sort((a, b) => b.id - a.id);
-  $('#hl').innerHTML = all.length ? all.map(i => `<li data-id="${i.id}"><img src="${i.thumb}" alt=""><span>${i.name}<small>メソッド ${i.m === 'C' ? 'A' : i.m}、${i.w}×${i.h}</small></span><button class="x" data-del="${i.id}" aria-label="${i.name} を削除">削除</button></li>`).join('') : '<li style="cursor:default">履歴はまだありません。作成した結果がここに表示されます。</li>';
+  $('#hl').innerHTML = all.length ? all.map(i => `<li data-id="${i.id}"><img src="${i.thumb}" alt=""><span>${i.name}<small>${/^[ABC]$/.test(i.m) ? 'メソッド ' + (i.m === 'C' ? 'A' : i.m) : i.m}、${i.w}×${i.h}</small></span><button class="x" data-del="${i.id}" aria-label="${i.name} を削除">削除</button></li>`).join('') : '<li style="cursor:default">履歴はまだありません。作成した結果がここに表示されます。</li>';
 }
-async function saveHist() {
+async function saveHist(label) {
   const c = S.res, t = document.createElement('canvas'), r = 96 / Math.max(c.width, c.height); t.width = Math.max(1, c.width * r | 0); t.height = Math.max(1, c.height * r | 0);
   t.getContext('2d').drawImage(c, 0, 0, t.width, t.height);
-  try { const blob = await blobOf(c); await tx('readwrite', s => s.put({ id: Date.now(), name: S.name, m: S.method, w: c.width, h: c.height, thumb: t.toDataURL('image/jpeg', .7), blob })); renderHist(); } catch { toast('このブラウザでは履歴を保存できません。'); }
+  try { const blob = await blobOf(c); await tx('readwrite', s => s.put({ id: Date.now(), name: S.name, m: label || S.method, w: c.width, h: c.height, thumb: t.toDataURL('image/jpeg', .7), blob })); const ks = (await tx('readonly', s => s.getAllKeys())) || []; for (const k of ks.slice(0, Math.max(0, ks.length - MAXH))) await tx('readwrite', s => s.delete(k)); renderHist(); } catch { toast('このブラウザでは履歴を保存できません。'); }
 }
 $('#hbtn').onclick = () => { $('#hist').classList.toggle('open'); renderHist(); };
 $('#hclr').onclick = async () => { await tx('readwrite', s => s.clear()); renderHist(); toast('履歴をすべて削除しました。'); };
@@ -111,7 +166,7 @@ $('#hl').onclick = async e => {
   const it = await tx('readonly', s => s.get(+li.dataset.id)); if (!it) return;
   const bm = await createImageBitmap(it.blob), c = document.createElement('canvas'); c.width = bm.width; c.height = bm.height;
   const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(bm, 0, 0);
-  S.out = { w: c.width, h: c.height, d: x.getImageData(0, 0, c.width, c.height).data }; S.res = c; S.name = it.name; S.srcUrl = null;
+  S.res = c; S.base = S.rn = null; S.name = it.name; S.srcUrl = null;
   $('#hist').classList.remove('open'); location.hash = '#/result';
 };
 
@@ -152,7 +207,7 @@ function initTile() {
 }
 function setMode(n) {
   $$('#modes button').forEach(b => b.classList.toggle('on', +b.dataset.n === n));
-  $('#cmp').hidden = n !== 0; $('#tc').hidden = n === 0; if (n === 0) return;
+  $('#rnd').hidden = n < 3; $('#cmp').hidden = n !== 0; $('#tc').hidden = n === 0; if (n === 0) return;
   T.n = n; T.z = .55; T.tz = 1; T.x = T.y = 0; // masuk perlahan (zoom lembut)
   const asp = S.res.width / S.res.height; T.tex.repeat.set(n, n);
   if (T.mesh) { T.sc.remove(T.mesh); T.mesh.geometry.dispose(); }
@@ -167,12 +222,12 @@ function fit() {
 async function showResult() {
   initTile(); if (T.tex) T.tex.dispose();
   T.tex = new THREE.CanvasTexture(S.res); T.tex.colorSpace = THREE.SRGBColorSpace; T.tex.wrapS = T.tex.wrapT = THREE.RepeatWrapping; T.tex.anisotropy = 8; T.mat.map = T.tex; T.mat.needsUpdate = true;
-  const [a, b] = edge(S.out);
+  const [a, b] = edgeC(S.res);
   $('#diag').textContent = `端の差(左右 ${(a * 100).toFixed(2)}%、上下 ${(b * 100).toFixed(2)}%)。値が小さいほど端の色が近いことを示しますが、品質の評価値ではなく、端の内側のグラデーションが合うことも保証しません。`;
-  $('#dim').textContent = `出力サイズ:${S.res.width}×${S.res.height} px(元画像と同じ)`;
-  const rb = await blobOf(S.res); $('#ia').src = $('#ia').dataset.u = URL.createObjectURL(rb);
+  $('#dim').textContent = `出力サイズ:${S.res.width}×${S.res.height} px` + (!S.base || S.res === S.base ? '(元画像と同じ)' : `(ランダム化 ${S.rn}×${S.rn}、上限 ${MAXPX}px)`);
+  const rb = await blobOf(S.res); if ($('#ia').dataset.u) URL.revokeObjectURL($('#ia').dataset.u); $('#ia').src = $('#ia').dataset.u = URL.createObjectURL(rb);
   $('#ib').src = S.srcUrl || ''; $('#mcmp').disabled = !S.srcUrl; $('#cr').oninput();
-  setMode(3);
+  setMode(S.rn || 3);
 }
 $('#modes').onclick = e => { const n = e.target.dataset.n; if (n !== undefined && S.res) setMode(+n); };
 $('#cr').oninput = () => { $('#ib').style.clipPath = `inset(0 ${100 - $('#cr').value}% 0 0)`; };
@@ -189,6 +244,26 @@ $('#exp').onclick = async () => {
   } catch (e) { toast('書き出しに失敗しました:' + e.message); }
 };
 
+/* ---------- Editor randomisasi ---------- */
+const opts = () => ({ hm: +$('#hm').value, ha: +$('#ha').value, vm: +$('#vm').value, va: +$('#va').value, sd: +$('#sd').value || 0, bw: +$('#bw').value });
+async function drawEditor() {
+  if (!S.base) return; const n = S.rn || 3, c = await compose(S.base, n, opts(), 1000), pc = $('#rc'), p = plan(n, S.base.width, S.base.height);
+  pc.width = c.width; pc.height = c.height; pc.getContext('2d').drawImage(c, 0, 0);
+  $('#rsz').textContent = `出力サイズ:${p.W}×${p.H} px` + (p.k < 1 ? `(上限 ${MAXPX}px のため縮小)` : '(元画像の整数倍)');
+}
+let rraf; const redraw = () => { cancelAnimationFrame(rraf); rraf = requestAnimationFrame(drawEditor); };
+function openEditor() { if (!S.base) S.base = S.res; $('#rn').textContent = `${S.rn || 3}×${S.rn || 3}`; redraw(); }
+$('#v-random').addEventListener('input', e => { if (e.target.type === 'range') e.target.nextElementSibling.textContent = e.target.value; redraw(); });
+$('#shf').onclick = () => { $('#sd').value = Math.floor(Math.random() * 1e6); redraw(); };
+$('#rnd').onclick = () => { S.rn = T.n; location.hash = '#/random'; };
+$('#rback').onclick = () => { location.hash = '#/result'; };
+$('#gen').onclick = async () => {
+  const b = $('#gen'), done = () => { b.disabled = false; b.textContent = '生成'; }; b.disabled = true;
+  try { const n = S.rn || 3; S.res = await compose(S.base, n, opts(), MAXPX, v => { b.textContent = `生成中… ${Math.round(v * 100)}%`; }); saveHist(`ランダム ${n}×${n}`); }
+  catch (e) { done(); return toast(e instanceof RangeError ? 'メモリが不足しています。タイル数を減らしてください。' : '生成に失敗しました:' + e.message); }
+  done(); location.hash = '#/result';
+};
+
 /* ---------- Proses + router ---------- */
 $('#go').onclick = async () => {
   if (!S.src) return toast('先に画像を選択してください。');
@@ -197,16 +272,16 @@ $('#go').onclick = async () => {
   try {
     S.out = await run(S.src, S.method, { ...S.p[S.method] }, v => { real = v; });
     real = 1; while (B.p < .995) await new Promise(r => setTimeout(r, 50));
-    S.res = toCanvas(S.out); await sleep(600); location.hash = '#/result'; saveHist();
+    S.res = toCanvas(S.out); S.out = null; S.base = S.rn = null; await sleep(600); location.hash = '#/result'; saveHist();
   } catch (e) { toast(e instanceof RangeError ? 'ブラウザのメモリが不足しています。より小さい画像をお試しください。' : '処理に失敗しました:' + e.message); location.hash = '#/'; }
   clearInterval(upd);
 };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 function route() {
   const r = location.hash.slice(2) || 'studio';
-  if ((r === 'result' && !S.res) || (r === 'load' && !S.src)) { location.hash = '#/'; return; }
+  if (((r === 'result' || r === 'random') && !S.res) || (r === 'load' && !S.src)) { location.hash = '#/'; return; }
   $$('.view').forEach(v => v.classList.toggle('on', v.id === 'v-' + (r === '' ? 'studio' : r)));
-  B.mode = r === 'load' ? 'load' : 'idle'; if (r === 'result') showResult();
+  B.mode = r === 'load' ? 'load' : 'idle'; if (r === 'result') showResult(); if (r === 'random') openEditor();
 }
 addEventListener('hashchange', route); route();
 
@@ -230,3 +305,9 @@ let ip; addEventListener('beforeinstallprompt', e => { e.preventDefault(); ip = 
 $('#inst').onclick = async () => { if (!ip) return; ip.prompt(); await ip.userChoice; ip = null; $('#inst').hidden = true; };
 addEventListener('appinstalled', () => { $('#inst').hidden = true; });
 if ('serviceWorker' in navigator) addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+
+/* ---------- 使い方パネル ---------- */
+const gd = $('#gd'), gOpen = o => { gd.classList.toggle('open', o); if (o) $('#gx').focus(); else $('#gbtn').focus(); };
+$('#gbtn').onclick = () => gOpen(true); $('#gx').onclick = () => gOpen(false);
+gd.addEventListener('click', e => { if (e.target === gd) gOpen(false); });
+addEventListener('keydown', e => { if (e.key === 'Escape' && gd.classList.contains('open')) gOpen(false); });

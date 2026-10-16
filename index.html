@@ -15,7 +15,7 @@
 <canvas id="bg" aria-hidden="true"></canvas>
 <header>
   <div><b>Seamless Texture Studio</b><small>シームレステクスチャをローカルで作成・確認・書き出し。画像は端末の外に出ません。</small></div>
-  <div class="hb"><button id="inst" class="ghost" hidden>インストール</button><button id="hbtn" class="ghost">履歴</button></div>
+  <div class="hb"><button id="inst" class="ghost" hidden>インストール</button><button id="gbtn" class="ghost">使い方</button><button id="hbtn" class="ghost">履歴</button></div>
 </header>
 
 <main>
@@ -52,6 +52,7 @@
       <div class="modes" id="modes">
         <button data-n="1">結果</button><button data-n="3" class="on">タイル 3×3</button><button data-n="5">5×5</button><button data-n="7">7×7</button><button data-n="0" id="mcmp">比較</button>
       </div>
+      <button id="rnd" class="primary" hidden>ランダム化</button>
     </div>
     <div class="stage glass" id="stage">
       <canvas id="tc"></canvas>
@@ -68,12 +69,47 @@
       <button id="exp" class="primary">テクスチャを書き出す</button>
     </div>
   </section>
+  <section class="view" id="v-random">
+    <div class="glass bar2"><button id="rback" class="ghost">戻る</button><b>ランダム化エディタ</b><span></span></div>
+    <div class="stage glass"><canvas id="rc"></canvas></div>
+    <div class="glass side">
+      <h2>タイルをずらして再構成</h2>
+      <p class="note">タイル数:<b id="rn"></b>。行ごと・列ごとにタイルをずらし、繰り返し感を減らします。</p>
+      <label>横ずらし(行) <select id="hm"><option value="0">なし</option><option value="1">階段</option><option value="2" selected>ランダム</option></select></label>
+      <label>量 (%) <input type="range" id="ha" min="0" max="100" value="50"><output>50</output></label>
+      <label>縦ずらし(列) <select id="vm"><option value="0" selected>なし</option><option value="1">階段</option><option value="2">ランダム</option></select></label>
+      <label>量 (%) <input type="range" id="va" min="0" max="100" value="50"><output>50</output></label>
+      <label>境界ブレンド幅 (%) <input type="range" id="bw" min="0" max="100" value="40"><output>40</output></label>
+      <p class="note">各境界で隣のずらしを滑らかに混ぜて継ぎ目を消します。大きいほど継ぎ目は消えますが、ぼやけ(ゴースト)が出やすくなります。</p>
+      <label>シード <input type="number" id="sd" value="1" min="0" max="999999"></label>
+      <button id="shf" class="ghost">シャッフル</button>
+      <p id="rsz" class="note"></p>
+      <button id="gen" class="primary">生成</button>
+    </div>
+  </section>
 </main>
 
 <aside id="hist" class="glass" aria-label="履歴">
   <div class="row"><h2>履歴</h2><button id="hclr" class="ghost">すべて削除</button></div>
+  <p class="note">最新 10 件まで保存され、古いものは自動で削除されます。</p>
   <ul id="hl"></ul>
 </aside>
+<div id="gd" role="dialog" aria-modal="true" aria-labelledby="gt">
+  <div class="glass">
+    <div class="row"><h2 id="gt">使い方</h2><button id="gx" class="ghost">閉じる</button></div>
+      <ol class="steps">
+        <li><div><b>画像を読み込む</b><span>左のエリアに画像をドラッグ&amp;ドロップするか、「画像を選択」を押してください。PNG、JPG、WebP などが使えます。画像はお使いの端末の中だけで処理され、外部には送信されません。</span></div></li>
+        <li><div><b>メソッドを選ぶ</b><span>中央のパネルで方法を選びます。A はおすすめで、水平方向と垂直方向を別々にブレンドして継ぎ目をなじませます。B は画像をずらし、端の部分を中央の絵柄で埋める方法です。スライダーで幅や強さを調整でき、「設定をリセット」で初期値に戻せます。</span></div></li>
+        <li><div><b>テクスチャを作成する</b><span>「テクスチャを作成」を押すと処理が始まり、粒子のアニメーションが表示されます。終わると自動で結果ページに移動します。</span></div></li>
+        <li><div><b>結果を確認する</b><span>「結果」は等倍表示です。「タイル」は同じ画像を 3×3、5×5、7×7 で並べ、継ぎ目や繰り返し感を確かめられます。ホイールで拡大・縮小、ドラッグで移動できます。「比較」では元の画像と結果をスライダーで見比べられます。端の差の数値は目安であり、品質の評価ではありません。</span></div></li>
+        <li><div><b>ランダム化で自然に仕上げる(任意)</b><span>タイル表示のときに「ランダム化」を押すと、編集画面が開きます。行ごとに横へ、列ごとに縦へタイルをずらし、境界ブレンドで継ぎ目をなじませます。「シャッフル」で別のパターンになり、「生成」を押すと結果ページに戻ります。生成後のサイズは元の画像の整数倍で、最大 4000px です。</span></div></li>
+        <li><div><b>書き出す</b><span>結果ページの右側で PNG か JPEG を選び、「テクスチャを書き出す」を押します。JPEG は品質を選べますが、透明な部分は白で塗りつぶされます。ファイル名は「元の名前_seamless」になります。</span></div></li>
+        <li><div><b>履歴を使う</b><span>右上の「履歴」から、最近の結果を開き直せます。保存されるのは最新 10 件で、古いものは自動で削除されます。「削除」や「すべて削除」で消すこともできます。</span></div></li>
+        <li><div><b>アプリとして使う(任意)</b><span>Chrome や Edge では、右上の「インストール」を押すとアプリとして追加できます。タスクバーにピン留めすると、すぐに開けます。</span></div></li>
+      </ol>
+      <p class="note">完全なシームレスを保証するものではありません。素材によっては継ぎ目が残ることがあります。</p>
+  </div>
+</div>
 <div id="toast" role="status"></div>
 <script type="module" src="src/app.js"></script>
 </body>
