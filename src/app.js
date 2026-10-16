@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
-const S = { src: null, name: '', out: null, res: null, srcUrl: null, method: 'C', p: {} };
+const S = { src: null, name: '', out: null, res: null, srcUrl: null, method: 'A', p: {} };
 
 /* ---------- Metode (implementasi piksel deterministik, sRGB, alpha premultiplied) ---------- */
 const M = {
-  C: { n: 'C:マルチディレクショナル(おすすめ)', d: '水平・垂直を別々にブレンドし、順序に依存しない双線形の重みでコーナーも処理します。軸ごとに幅を変えられます。',
+  A: { n: 'A:マルチディレクショナル(おすすめ)', d: '水平・垂直を別々にブレンドし、順序に依存しない双線形の重みでコーナーも処理します。軸ごとに幅を変えられます。',
     p: [['wx', '水平ブレンド幅 (%)', 5, 50, 14], ['wy', '垂直ブレンド幅 (%)', 5, 50, 14], ['s', '強度 (%)', 0, 100, 100], ['c', 'コーナー強度 (%)', 0, 100, 100]] },
   B: { n: 'B:オフセット+フェザリング', d: '画像をラップアラウンドでずらし、端のゾーンを中央部分の内容でなじませます。結果は元の位置に戻り、外側の端がつながります。',
     p: [['ox', '水平オフセット (%)', 0, 100, 50], ['oy', '垂直オフセット (%)', 0, 100, 50], ['w', 'フェザー幅 (%)', 5, 50, 25], ['s', '強度 (%)', 0, 100, 100]] }
@@ -95,7 +95,7 @@ const db = new Promise((ok, no) => { const r = indexedDB.open('sts', 1); r.onupg
 const tx = async (m, f) => { const d = await db; return new Promise((ok, no) => { const t = d.transaction('h', m), q = f(t.objectStore('h')); t.oncomplete = () => ok(q && q.result); t.onerror = no; }); };
 async function renderHist() {
   const all = ((await tx('readonly', s => s.getAll())) || []).sort((a, b) => b.id - a.id);
-  $('#hl').innerHTML = all.length ? all.map(i => `<li data-id="${i.id}"><img src="${i.thumb}" alt=""><span>${i.name}<small>メソッド ${i.m}、${i.w}×${i.h}</small></span><button class="x" data-del="${i.id}" aria-label="${i.name} を削除">削除</button></li>`).join('') : '<li style="cursor:default">履歴はまだありません。作成した結果がここに表示されます。</li>';
+  $('#hl').innerHTML = all.length ? all.map(i => `<li data-id="${i.id}"><img src="${i.thumb}" alt=""><span>${i.name}<small>メソッド ${i.m === 'C' ? 'A' : i.m}、${i.w}×${i.h}</small></span><button class="x" data-del="${i.id}" aria-label="${i.name} を削除">削除</button></li>`).join('') : '<li style="cursor:default">履歴はまだありません。作成した結果がここに表示されます。</li>';
 }
 async function saveHist() {
   const c = S.res, t = document.createElement('canvas'), r = 96 / Math.max(c.width, c.height); t.width = Math.max(1, c.width * r | 0); t.height = Math.max(1, c.height * r | 0);
