@@ -1,15 +1,13 @@
 import * as THREE from 'three';
 const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
-const S = { src: null, name: '', out: null, res: null, srcUrl: null, method: 'B', p: {} };
+const S = { src: null, name: '', out: null, res: null, srcUrl: null, method: 'C', p: {} };
 
 /* ---------- Metode (implementasi piksel deterministik, sRGB, alpha premultiplied) ---------- */
 const M = {
-  A: { n: 'A: Edge Blend', d: 'Memadukan tepi dengan cermin tepi di sisi seberang. Cepat, tetapi bisa melembutkan atau menimbulkan bayangan dekat tepi.',
-    p: [['w', 'Lebar blend (%)', 5, 50, 25], ['s', 'Kekuatan (%)', 0, 100, 100]] },
-  B: { n: 'B: Offset + Feathering (disarankan)', d: 'Menggeser gambar dengan wraparound, lalu memudarkan zona tepi dengan isi dari bagian tengah. Hasil berada pada posisi semula dan tepi luarnya menyambung.',
-    p: [['ox', 'Offset horizontal (%)', 0, 100, 50], ['oy', 'Offset vertikal (%)', 0, 100, 50], ['w', 'Lebar feather (%)', 5, 50, 25], ['s', 'Kekuatan (%)', 0, 100, 100]] },
-  C: { n: 'C: Multidirectional', d: 'Blend horizontal dan vertikal dengan bobot bilinear yang tidak bergantung urutan, termasuk area sudut. Lebar tiap sumbu bisa berbeda.',
-    p: [['wx', 'Lebar horizontal (%)', 5, 50, 25], ['wy', 'Lebar vertikal (%)', 5, 50, 25], ['s', 'Kekuatan (%)', 0, 100, 100], ['c', 'Kekuatan sudut (%)', 0, 100, 100]] }
+  C: { n: 'C:マルチディレクショナル(おすすめ)', d: '水平・垂直を別々にブレンドし、順序に依存しない双線形の重みでコーナーも処理します。軸ごとに幅を変えられます。',
+    p: [['wx', '水平ブレンド幅 (%)', 5, 50, 14], ['wy', '垂直ブレンド幅 (%)', 5, 50, 14], ['s', '強度 (%)', 0, 100, 100], ['c', 'コーナー強度 (%)', 0, 100, 100]] },
+  B: { n: 'B:オフセット+フェザリング', d: '画像をラップアラウンドでずらし、端のゾーンを中央部分の内容でなじませます。結果は元の位置に戻り、外側の端がつながります。',
+    p: [['ox', '水平オフセット (%)', 0, 100, 50], ['oy', '垂直オフセット (%)', 0, 100, 50], ['w', 'フェザー幅 (%)', 5, 50, 25], ['s', '強度 (%)', 0, 100, 100]] }
 };
 for (const k in M) S.p[k] = Object.fromEntries(M[k].p.map(a => [a[0], a[4]]));
 
@@ -28,10 +26,7 @@ async function run(src, m, p, prog) {
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       acc[0] = acc[1] = acc[2] = acc[3] = 0;
-      if (m === 'A') {
-        const ax = mk(x, w, bx) * .5, ay = mk(y, h, by) * .5, a = 1 - (1 - ax) * (1 - ay), t = ax + ay;
-        add(1 - a, x, y); if (a > 0) { add(a * ax / t, w - 1 - x, y); add(a * ay / t, x, h - 1 - y); }
-      } else if (m === 'B') {
+      if (m === 'B') {
         const a = 1 - (1 - mk(x, w, bx)) * (1 - mk(y, h, by));
         add(1 - a, x, y); add(a, (x + ox) % w, (y + oy) % h);
       } else {
@@ -59,11 +54,11 @@ function edge({ w, h, d }) {
 let tt; const toast = m => { const t = $('#toast'); t.textContent = m; t.classList.add('on'); clearTimeout(tt); tt = setTimeout(() => t.classList.remove('on'), 4500); };
 const kb = n => n > 1048576 ? (n / 1048576).toFixed(2) + ' MB' : Math.round(n / 1024) + ' KB';
 const toCanvas = o => { const c = document.createElement('canvas'); c.width = o.w; c.height = o.h; c.getContext('2d').putImageData(new ImageData(o.d, o.w, o.h), 0, 0); return c; };
-const blobOf = (c, t = 'image/png', q) => new Promise((ok, no) => c.toBlob(b => b ? ok(b) : no(new Error('Browser tidak bisa menyandikan format ini.')), t, q));
+const blobOf = (c, t = 'image/png', q) => new Promise((ok, no) => c.toBlob(b => b ? ok(b) : no(new Error('このブラウザでは、この形式でエンコードできません。')), t, q));
 
 /* ---------- Impor ---------- */
 async function load(f) {
-  if (!f) return toast('Belum ada gambar yang dipilih.');
+  if (!f) return toast('画像が選択されていません。');
   try {
     const bm = await createImageBitmap(f, { imageOrientation: 'from-image' });
     const c = document.createElement('canvas'); c.width = bm.width; c.height = bm.height;
@@ -72,9 +67,9 @@ async function load(f) {
     S.name = f.name.replace(/\.[^.]+$/, ''); if (S.srcUrl) URL.revokeObjectURL(S.srcUrl);
     S.srcUrl = URL.createObjectURL(f); S.out = S.res = null; // buang hasil lama
     $('#thumb').src = S.srcUrl; $('#thumb').hidden = false; $('#go').disabled = false;
-    $('#meta').textContent = `${f.name}: ${bm.width}×${bm.height} px, ${kb(f.size)}, ${f.type || 'format tidak diketahui'}`;
+    $('#meta').textContent = `${f.name}:${bm.width}×${bm.height} px, ${kb(f.size)}, ${f.type || '形式不明'}`;
   } catch (e) {
-    toast(e instanceof RangeError ? 'Gambar terlalu besar untuk memori browser. Coba gambar yang lebih kecil.' : 'File tidak bisa dibaca sebagai gambar. Gunakan PNG, JPG, atau WebP yang tidak rusak.');
+    toast(e instanceof RangeError ? '画像がブラウザのメモリに対して大きすぎます。より小さい画像をお試しください。' : '画像として読み込めませんでした。破損していない PNG、JPG、WebP を使用してください。');
   }
 }
 const drop = $('#drop');
@@ -100,15 +95,15 @@ const db = new Promise((ok, no) => { const r = indexedDB.open('sts', 1); r.onupg
 const tx = async (m, f) => { const d = await db; return new Promise((ok, no) => { const t = d.transaction('h', m), q = f(t.objectStore('h')); t.oncomplete = () => ok(q && q.result); t.onerror = no; }); };
 async function renderHist() {
   const all = ((await tx('readonly', s => s.getAll())) || []).sort((a, b) => b.id - a.id);
-  $('#hl').innerHTML = all.length ? all.map(i => `<li data-id="${i.id}"><img src="${i.thumb}" alt=""><span>${i.name}<small>Metode ${i.m}, ${i.w}×${i.h}</small></span><button class="x" data-del="${i.id}" aria-label="Hapus ${i.name}">Hapus</button></li>`).join('') : '<li style="cursor:default">Belum ada riwayat. Hasil yang kamu buat muncul di sini.</li>';
+  $('#hl').innerHTML = all.length ? all.map(i => `<li data-id="${i.id}"><img src="${i.thumb}" alt=""><span>${i.name}<small>メソッド ${i.m}、${i.w}×${i.h}</small></span><button class="x" data-del="${i.id}" aria-label="${i.name} を削除">削除</button></li>`).join('') : '<li style="cursor:default">履歴はまだありません。作成した結果がここに表示されます。</li>';
 }
 async function saveHist() {
   const c = S.res, t = document.createElement('canvas'), r = 96 / Math.max(c.width, c.height); t.width = Math.max(1, c.width * r | 0); t.height = Math.max(1, c.height * r | 0);
   t.getContext('2d').drawImage(c, 0, 0, t.width, t.height);
-  try { const blob = await blobOf(c); await tx('readwrite', s => s.put({ id: Date.now(), name: S.name, m: S.method, w: c.width, h: c.height, thumb: t.toDataURL('image/jpeg', .7), blob })); renderHist(); } catch { toast('Riwayat tidak bisa disimpan di browser ini.'); }
+  try { const blob = await blobOf(c); await tx('readwrite', s => s.put({ id: Date.now(), name: S.name, m: S.method, w: c.width, h: c.height, thumb: t.toDataURL('image/jpeg', .7), blob })); renderHist(); } catch { toast('このブラウザでは履歴を保存できません。'); }
 }
 $('#hbtn').onclick = () => { $('#hist').classList.toggle('open'); renderHist(); };
-$('#hclr').onclick = async () => { await tx('readwrite', s => s.clear()); renderHist(); toast('Semua riwayat dihapus.'); };
+$('#hclr').onclick = async () => { await tx('readwrite', s => s.clear()); renderHist(); toast('履歴をすべて削除しました。'); };
 $('#hl').onclick = async e => {
   const del = e.target.dataset.del, li = e.target.closest('li[data-id]');
   if (del) { await tx('readwrite', s => s.delete(+del)); return renderHist(); }
@@ -173,8 +168,8 @@ async function showResult() {
   initTile(); if (T.tex) T.tex.dispose();
   T.tex = new THREE.CanvasTexture(S.res); T.tex.colorSpace = THREE.SRGBColorSpace; T.tex.wrapS = T.tex.wrapT = THREE.RepeatWrapping; T.tex.anisotropy = 8; T.mat.map = T.tex; T.mat.needsUpdate = true;
   const [a, b] = edge(S.out);
-  $('#diag').textContent = `Selisih tepi kiri-kanan ${(a * 100).toFixed(2)}%, atas-bawah ${(b * 100).toFixed(2)}%. Nilai lebih kecil berarti warna tepi lebih dekat, tetapi bukan nilai mutu dan tidak menjamin gradien di dalam tepi cocok.`;
-  $('#dim').textContent = `Dimensi keluaran: ${S.res.width}×${S.res.height} px (sama dengan sumber).`;
+  $('#diag').textContent = `端の差(左右 ${(a * 100).toFixed(2)}%、上下 ${(b * 100).toFixed(2)}%)。値が小さいほど端の色が近いことを示しますが、品質の評価値ではなく、端の内側のグラデーションが合うことも保証しません。`;
+  $('#dim').textContent = `出力サイズ:${S.res.width}×${S.res.height} px(元画像と同じ)`;
   const rb = await blobOf(S.res); $('#ia').src = $('#ia').dataset.u = URL.createObjectURL(rb);
   $('#ib').src = S.srcUrl || ''; $('#mcmp').disabled = !S.srcUrl; $('#cr').oninput();
   setMode(3);
@@ -190,20 +185,20 @@ $('#exp').onclick = async () => {
     const x = c.getContext('2d'); if (j) { x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); } x.drawImage(S.res, 0, 0);
     const b = await blobOf(c, j ? 'image/jpeg' : 'image/png', $('#q').value / 100), a = document.createElement('a');
     a.href = URL.createObjectURL(b); a.download = `${S.name}_seamless.${j ? 'jpg' : 'png'}`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-    $('#dim').textContent = `Diekspor: ${c.width}×${c.height} px, ${kb(b.size)}.`;
-  } catch (e) { toast('Ekspor gagal: ' + e.message); }
+    $('#dim').textContent = `書き出し完了:${c.width}×${c.height} px、${kb(b.size)}`;
+  } catch (e) { toast('書き出しに失敗しました:' + e.message); }
 };
 
 /* ---------- Proses + router ---------- */
 $('#go').onclick = async () => {
-  if (!S.src) return toast('Pilih gambar dulu.');
+  if (!S.src) return toast('先に画像を選択してください。');
   location.hash = '#/load'; B.p = B.tgt = 0; let real = 0, done = false; const t0 = performance.now();
   const upd = setInterval(() => { B.tgt = Math.min(real, (performance.now() - t0) / 3400); }, 30); // animasi minimal ±3,4 detik
   try {
     S.out = await run(S.src, S.method, { ...S.p[S.method] }, v => { real = v; });
     real = 1; while (B.p < .995) await new Promise(r => setTimeout(r, 50));
     S.res = toCanvas(S.out); await sleep(600); location.hash = '#/result'; saveHist();
-  } catch (e) { toast(e instanceof RangeError ? 'Memori browser tidak cukup. Coba gambar yang lebih kecil.' : 'Pemrosesan gagal: ' + e.message); location.hash = '#/'; }
+  } catch (e) { toast(e instanceof RangeError ? 'ブラウザのメモリが不足しています。より小さい画像をお試しください。' : '処理に失敗しました:' + e.message); location.hash = '#/'; }
   clearInterval(upd);
 };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -218,7 +213,7 @@ addEventListener('hashchange', route); route();
 /* ---------- Loop render ---------- */
 function resize() { R.setPixelRatio(Math.min(devicePixelRatio, 2)); U.uPR.value = R.getPixelRatio(); R.setSize(innerWidth, innerHeight, false); cam.aspect = innerWidth / innerHeight; cam.updateProjectionMatrix(); if (S.res) fit(); }
 addEventListener('resize', resize); resize();
-const clk = new THREE.Clock(), msg = ['Membaca piksel', 'Menggeser dan memadukan tepi', 'Menyambungkan sudut', 'Merapikan hasil'];
+const clk = new THREE.Clock(), msg = ['ピクセルを読み込み中', '端をずらしてブレンド中', 'コーナーをつなげています', '仕上げ中'];
 (function frame() {
   U.uT.value = clk.getElapsedTime(); U.uM.value += ((B.mode === 'load' ? 1 : 0) - U.uM.value) * .025; // transisi partikel >2 dtk
   B.p += (B.tgt - B.p) * .05; U.uP.value = B.p; U.uMo.value.lerp(mouse, .08);
@@ -229,3 +224,9 @@ const clk = new THREE.Clock(), msg = ['Membaca piksel', 'Menggeser dan memadukan
   }
   requestAnimationFrame(frame);
 })();
+
+/* ---------- PWA: インストール(タスクバーにピン留め)と Service Worker ---------- */
+let ip; addEventListener('beforeinstallprompt', e => { e.preventDefault(); ip = e; $('#inst').hidden = false; });
+$('#inst').onclick = async () => { if (!ip) return; ip.prompt(); await ip.userChoice; ip = null; $('#inst').hidden = true; };
+addEventListener('appinstalled', () => { $('#inst').hidden = true; });
+if ('serviceWorker' in navigator) addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
